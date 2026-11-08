@@ -1,6 +1,8 @@
 function [q, qseq] = local_mpc_fmincon(ls, dni_prev, q_prev, Tin, Tout, Ta, qmax_eff, cfg)
 % First-step flow of the local MPC for one loop, with flow cap qmax_eff.
+    q_stab = 1.2;
     Nu = cfg.Nu;
+
     lb = cfg.qmin * ones(Nu, 1);
     ub = qmax_eff * ones(Nu, 1);
 
@@ -13,9 +15,11 @@ function [q, qseq] = local_mpc_fmincon(ls, dni_prev, q_prev, Tin, Tout, Ta, qmax
 
     best  = inf;  ubest = x0{1};
     for i = 1:4
+        if ~isfinite(f(x0{i})), continue; end       % skip a bad starting point
         [u, fv] = fmincon(f, x0{i}, [], [], [], [], lb, ub, [], opts);
         if fv < best, best = fv; ubest = u; end
     end
+    if isempty(ubest), error('local_mpc_fmincon: all starting points gave non-finite cost'); end
 
     qseq = ubest(:).';     % whole planned sequence (l/s)
     q    = qseq(1);        % first move is what gets applied
