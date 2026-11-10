@@ -2,7 +2,12 @@ function [Kp, Ki, sweep_tbl] = pi_tune()
 % PI_TUNE Tunes the PI controller using Smith's two-point FOPDT method and IMC rules,
 % then runs the setpoint sweep Tref in {220, 240, 260, 280} degC and exports logs/log_PI.mat.
 
-    addpath(genpath(pwd));
+    % Lock Current Folder to root 'project/' directory regardless of where user calls pi_tune
+    base_dir  = fileparts(mfilename('fullpath'));
+    proj_root = fileparts(base_dir);
+    cd(proj_root);
+    addpath(genpath(proj_root));
+
     cfg  = config();
     s    = initial_state(cfg);
     Tin0 = s.Tin; % Hold Tin = 155 degC fixed during open-loop collector step test
@@ -17,7 +22,7 @@ function [Kp, Ki, sweep_tbl] = pi_tune()
 
     for k = 1:N_settle
         [s, ~] = plant_step(s, q0, D, cfg);
-        s.Tin  = Tin0; % Isolate collector loop dynamics from steam-generator feedback drift
+        s.Tin  = Tin0;
     end
     T_initial = s.Tout;
 
@@ -30,9 +35,9 @@ function [Kp, Ki, sweep_tbl] = pi_tune()
     end
 
     %% 2. Fit First-Order Plus Dead-Time (FOPDT) Model via Smith's Two-Point Method
-    dT_out = Tout_step(end) - T_initial; % Negative change (~ -10.3 degC)
-    dq_lps = 0.05;                       % +0.05 l/s step
-    K_proc = dT_out / dq_lps;            % Negative process gain (~ -206.35 degC / (l/s))
+    dT_out = Tout_step(end) - T_initial;
+    dq_lps = 0.05;
+    K_proc = dT_out / dq_lps;
 
     y_norm = (Tout_step - T_initial) / dT_out;
     t28    = t_step(find(y_norm >= 0.283, 1, 'first'));
@@ -56,16 +61,17 @@ function [Kp, Ki, sweep_tbl] = pi_tune()
     best_W    = -inf;
     best_log  = struct();
 
-    % Build the Simulink model once and load into memory
+    % Build the Simulink model once and load into memory via absolute path
     build_baseline_pi(Kp, Ki, Trefs(1));
     fprintf('Successfully generated simulink/baseline_pi.slx\n');
-    mdl = 'baseline_pi';
-    load_system(fullfile('simulink', 'baseline_pi.slx'));
+    mdl     = 'baseline_pi';
+    slx_pth = fullfile(proj_root, 'simulink', 'baseline_pi.slx');
+    load_system(slx_pth);
 
     for idx = 1:numel(Trefs)
         Tref_val = Trefs(idx);
         set_param([mdl '/Tref'], 'Value', num2str(Tref_val));
-        save_system(mdl);
+        save_system(mdl, slx_pth);
 
         out = sim(mdl);
 
@@ -81,7 +87,7 @@ function [Kp, Ki, sweep_tbl] = pi_tune()
         % Format into 120 controller steps (1 minute each = 120 steps of 0.5 s)
         K_steps  = 120;
         nsub     = 120;
-        sample_k = (1:K_steps) * nsub; % End-of-minute indices
+        sample_k = (1:K_steps) * nsub;
 
         log_cand.name       = 'PI';
         log_cand.scenario   = 'frejo2h';
@@ -109,7 +115,8 @@ function [Kp, Ki, sweep_tbl] = pi_tune()
     sweep_tbl = table(Trefs(:), mean_W_kW(:), 'VariableNames', {'Tref_degC', 'MeanPower_kW'});
     disp(sweep_tbl);
 
-    if ~exist('logs', 'dir'), mkdir('logs'); end
+    logs_dir = fullfile(proj_root, 'logs');
+    if ~exist(logs_dir, 'dir'), mkdir(logs_dir); end
     log = best_log; %#ok<NASGU>
-    save(fullfile('logs', 'log_PI.mat'), 'log', 'sweep_tbl');
+    save(fullfile(logs_dir, 'log_PI.mat'), 'log', 'sweep_tbl');
 end
